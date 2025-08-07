@@ -1,6 +1,7 @@
 #scikit learn mapei kullanmak (sklearn)  https://scikit-learn.org/stable/modules/generated/sklearn.metrics.mean_absolute_percentage_error.html
 #tensorflow mapei kullanmak (tf)  https://www.tensorflow.org/api_docs/python/tf/keras/metrics/MeanAbsolutePercentageError
 import os
+import vectorbt as vbt
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -14,6 +15,30 @@ from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.layers import Dropout, Activation, Dense, LSTM
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.callbacks import ModelCheckpoint
+
+def create_trading_decisions(price_data, strategy_type, y_hat_last, start_index):
+    decisions = pd.Series(0, index=price_data.index, dtype=int)
+    
+    if strategy_type == 'momentum':
+        test_end_index = start_index + len(y_hat_last)
+        if test_end_index > len(price_data):
+            test_end_index = len(price_data)
+            y_hat_last = y_hat_last[:len(price_data) - start_index]
+        
+        test_indices = price_data.index[start_index:test_end_index]
+        
+        prev_prices = price_data['midPrice'].shift(1).loc[test_indices]
+        
+        buy_signals = y_hat_last > prev_prices.values
+        sell_signals = y_hat_last < prev_prices.values
+        
+        decisions.loc[test_indices] = np.select(
+            [buy_signals, sell_signals],
+            [1, -1],
+            default=0
+        )
+    
+    return decisions
 
 def mean_absolute_percentage_error(y_true, y_pred):
     y_true = tf.cast(y_true, tf.float32)
@@ -95,15 +120,35 @@ def main():
     np.random.seed(RANDOM_SEED)
     tf.random.set_seed(RANDOM_SEED) 
 
-    gpus = tf.config.list_physical_devices('GPU')
+    """gpus = tf.config.list_physical_devices('GPU')
     if gpus:
         print(f"\nTensorFlow detected {len(gpus)} GPU(s):")
         for gpu in gpus:
             print(f"  - {gpu}")
     else:
+        print("\nNo GPU .") """
+
+    os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+    mps_device_name = "/device:GPU:0"
+    if tf.config.list_physical_devices('GPU'):
+        print("\n detected GPU.")
+        try:
+            tf.config.set_logical_device_configuration(
+                tf.config.list_physical_devices('GPU')[0],
+                [tf.config.LogicalDeviceConfiguration(memory_limit=1024)]
+            )
+            print("using GPU .")
+        except RuntimeError as e:
+            print(e)
+        
+        device_name = mps_device_name
+    else:
         print("\nNo GPU .")
+        device_name = "/device:CPU:0"
+        
+    print(f"Using device: {device_name}")  
  
-    csv_path = "data/2025-07-01-AKBNK-5.csv"
+    csv_path = "data/2025-08-06-AKBNK-10.csv"
 
     df = pd.read_csv(csv_path, sep=';', parse_dates=['DateTime'])
 
@@ -188,13 +233,13 @@ def main():
     adam = Adam(learning_rate=1e-4)
     model.compile(loss='mean_squared_error', optimizer=adam, metrics=[mean_absolute_percentage_error])
     
-    BATCH_SIZE = 500
+    BATCH_SIZE = 300
 
     print("\nStarting model training...")
     history = model.fit(
         X_train,
         y_train,
-        epochs=10,
+        epochs=350,
         batch_size=BATCH_SIZE,
         shuffle=False, 
         validation_split=0.2,
@@ -261,6 +306,57 @@ def main():
     
     print(f"\nFeature columns used for training: {feature_columns}")
     print(f"Number of features: {N_FEATURES}")
+
+    print("\nMaking predictions on test data...")
+    y_hat = best_model.predict(X_test)
+
+    y_test_inverse = scaler.inverse_transform(y_test)
+    y_hat_inverse = scaler.inverse_transform(y_hat)
+    
+    last_col_idx = feature_columns.index('midPrice') 
+    y_test_last = y_test_inverse[:, last_col_idx]
+    y_hat_last = y_hat_inverse[:, last_col_idx]
+
+    decisions = create_trading_decisions(
+        df, 
+        'momentum', 
+        y_hat_last, 
+        start_index=SEQ_LEN + int(0.9 * (len(df) - SEQ_LEN))
+    )
+    """print(decisions.head(10))
+    print("--------------------------------- \n ")
+    print(decisions.tail(10))"""
+    print("\n VectorBT backtest ...")
+    backtest_price = df['midPrice']
+    decisions_df = pd.DataFrame(decisions)
+    weights = decisions_df.div(decisions_df.abs().sum(axis=1), axis=0).fillna(0)
+
+    pf = vbt.Portfolio.from_orders(
+        close = backtest_price,
+        size=weights,
+        size_type='targetpercent',
+        #freq='1s',
+        init_cash=100,
+        cash_sharing=True,
+        call_seq='auto'
+    )
+    """entries = (decisions == 1)
+    exits = (decisions == -1)
+
+    pf = vbt.Portfolio.from_signals(
+        backtest_price,
+        entries,
+        exits,
+        freq='1s',
+        init_cash=100
+    )"""
+    print("\nBacktest Stats:")
+    print(pf.stats())
+
+    print("\nPortfolio Plot:")
+    fig = pf.plot()
+    fig.show()
+    #run_backtest(df, y_hat_last, y_test_last, SEQ_LEN)
 
 if __name__ == "__main__":
     main()
