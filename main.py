@@ -16,6 +16,8 @@ from tensorflow.keras.layers import Dropout, Activation, Dense, LSTM
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.callbacks import ModelCheckpoint
 
+vbt.settings.array_wrapper['freq'] = '1s'
+
 def create_trading_decisions(price_data, strategy_type, y_hat_last, start_index):
     decisions = pd.Series(0, index=price_data.index, dtype=int)
     
@@ -243,9 +245,7 @@ def main():
         batch_size=BATCH_SIZE,
         shuffle=False, 
         validation_split=0.2,
-        callbacks=[lr_scheduler, model_checkpoint_callback],
-        # use_multiprocessing=True, 
-        # workers=4 
+        callbacks=[lr_scheduler, model_checkpoint_callback]
     )
     print("Model training finished.")
     
@@ -255,7 +255,7 @@ def main():
                                             custom_objects={'mean_absolute_percentage_error': mean_absolute_percentage_error})
     else:
         print(f"\nError: Best model not found at {checkpoint_filepath}. Using the last trained model.")
-        best_model = model # Fallback to the last trained model if checkpoint not found
+        best_model = model 
 
     print("\nEvaluating model on test data...")
     test_loss, test_mape = best_model.evaluate(X_test, y_test, verbose=0)
@@ -335,7 +335,7 @@ def main():
         close = backtest_price,
         size=weights,
         size_type='targetpercent',
-        #freq='1s',
+        freq='1s',
         init_cash=100,
         cash_sharing=True,
         call_seq='auto'
@@ -343,9 +343,24 @@ def main():
     orders = pf.orders
     print("\nbuy count: ", orders.buy.count())
     print("\nsell count: ", orders.sell.count())
-    
+
+    full_stats = pf.stats()
+    ann_factor = pf.returns().vbt.returns().ann_factor
+    print(f"Ann Factor:                         {ann_factor}")
     print("\nBacktest Stats:")
-    print(pf.stats())
+    print(f"Ann Factor:                         {ann_factor}")
+    print(f"Total Return [%]:                   {full_stats['Total Return [%]']:.3f}%")
+    print(f"Annualized Expected Return [%]:     {(pf.returns().mean() * ann_factor):.3f}%")
+    print(f"Annualized Expected Volatility [%]: {pf.returns().std() * (ann_factor ** .5):.3f}%")
+    print(f"Sharpe Ratio:                       {full_stats['Sharpe Ratio']:.3f}")
+    print(f"Sharpe Ratio:                       {((pf.returns().mean() * ann_factor)/(pf.returns().std() * (ann_factor ** .5))):.3f}")
+    print(f"Max Drawdown [%]:                   {full_stats['Max Drawdown [%]']:.3f}%")
+
+    pf.value().plot()
+    plt.show()
+
+    print('Values', pf.value())
+    print('Returns', pf.returns())
 
     print("\nPortfolio Plot:")
     fig = pf.plot()
