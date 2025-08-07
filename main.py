@@ -340,16 +340,10 @@ def main():
         cash_sharing=True,
         call_seq='auto'
     )
-    """entries = (decisions == 1)
-    exits = (decisions == -1)
-
-    pf = vbt.Portfolio.from_signals(
-        backtest_price,
-        entries,
-        exits,
-        freq='1s',
-        init_cash=100
-    )"""
+    orders = pf.orders
+    print("\nbuy count: ", orders.buy.count())
+    print("\nsell count: ", orders.sell.count())
+    
     print("\nBacktest Stats:")
     print(pf.stats())
 
