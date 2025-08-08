@@ -198,7 +198,7 @@ def main():
     scaler = MinMaxScaler()
     scaled_features = scaler.fit_transform(feature_data)
     
-    SEQ_LEN = 150
+    SEQ_LEN = 500
     X_train, y_train, X_test, y_test = preprocess(scaled_features, SEQ_LEN, train_split = 0.9)
     
     DROPOUT = 0.2
