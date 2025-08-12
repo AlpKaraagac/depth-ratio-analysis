@@ -235,7 +235,7 @@ def main():
     adam = Adam(learning_rate=1e-4)
     model.compile(loss='mean_squared_error', optimizer=adam, metrics=[mean_absolute_percentage_error])
     
-    BATCH_SIZE = 300
+    BATCH_SIZE = 500
 
     print("\nStarting model training...")
     history = model.fit(
@@ -334,12 +334,25 @@ def main():
     pf = vbt.Portfolio.from_orders(
         close = backtest_price,
         size=weights,
-        size_type='targetpercent',
-        freq='1s',
+        size_type='amount',
+        freq='1T',
         init_cash=100,
         cash_sharing=True,
-        call_seq='auto'
+        call_seq='auto',
+        fees=0.001,
+        slippage=0.0005
     )
+    """
+            close=price_data,
+            size=weights,
+            size_type=size_type,
+            init_cash=init_cash,
+            freq="1T",
+            cash_sharing=True,
+            call_seq='auto',
+            fees=0.001,  # %0.1 transaction cost
+            slippage=0.0005  # %0.05 slippage
+    """
     orders = pf.orders
     print("\nbuy count: ", orders.buy.count())
     print("\nsell count: ", orders.sell.count())
