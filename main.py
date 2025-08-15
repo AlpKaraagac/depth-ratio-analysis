@@ -16,7 +16,8 @@ from tensorflow.keras.layers import Dropout, Activation, Dense, LSTM
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.callbacks import ModelCheckpoint
 
-vbt.settings.array_wrapper['freq'] = '1s'
+vbt.settings.returns['year_freq'] = '252 days'
+vbt.settings.array_wrapper['freq'] = '1T'
 
 def create_trading_decisions(price_data, strategy_type, y_hat_last, start_index):
     decisions = pd.Series(0, index=price_data.index, dtype=int)
@@ -33,6 +34,31 @@ def create_trading_decisions(price_data, strategy_type, y_hat_last, start_index)
         
         buy_signals = y_hat_last > prev_prices.values
         sell_signals = y_hat_last < prev_prices.values
+        
+        decisions.loc[test_indices] = np.select(
+            [buy_signals, sell_signals],
+            [1, -1],
+            default=0
+        )
+    
+    elif strategy_type == 'mean_reversion':
+        test_end_index = start_index + len(y_hat_last)
+        if test_end_index > len(price_data):
+            test_end_index = len(price_data)
+            y_hat_last = y_hat_last[:len(price_data) - start_index]
+        
+        test_indices = price_data.index[start_index:test_end_index]
+        
+        window_size = 20
+        moving_avg = price_data['midPrice'].rolling(window=window_size).mean()
+        
+        ma_values = moving_avg.loc[test_indices]
+        predicted_prices = y_hat_last
+        
+        threshold = 0.001  # 0.1% threshold
+        
+        buy_signals = (predicted_prices < ma_values.values) & (ma_values.values - predicted_prices > threshold * ma_values.values)
+        sell_signals = (predicted_prices > ma_values.values) & (predicted_prices - ma_values.values > threshold * ma_values.values)
         
         decisions.loc[test_indices] = np.select(
             [buy_signals, sell_signals],
@@ -114,6 +140,49 @@ def preprocess(data_raw, seq_len, train_split):
 
     return X_train, y_train, X_test, y_test
 
+def run_backtest(df, decisions):
+    print("\n VectorBT backtest...")
+    
+    backtest_price = df['midPrice']
+    decisions_df = pd.DataFrame(decisions)
+    weights = decisions_df.div(decisions_df.abs().sum(axis=1), axis=0).fillna(0)
+    
+    pf = vbt.Portfolio.from_orders(
+        close = backtest_price,
+        size=weights,
+        size_type='amount',
+        freq='1T',
+        init_cash=100,
+        cash_sharing=True,
+        call_seq='auto',
+        fees=0.001,
+        slippage=0.0005
+    )
+
+    full_stats = pf.stats()
+    ann_factor = pf.returns().vbt.returns().ann_factor
+    print(f"Ann Factor:                         {ann_factor}")
+    print("\nBacktest Stats:")
+    print(f"Ann Factor:                         {ann_factor}")
+    print(f"Total Return [%]:                   {full_stats['Total Return [%]']:.3f}%")
+    print(f"Annualized Expected Return [%]:     {(pf.returns().mean() * ann_factor):.3f}%")
+    print(f"Annualized Expected Volatility [%]: {pf.returns().std() * (ann_factor ** .5):.3f}%")
+    print(f"Sharpe Ratio:                       {full_stats['Sharpe Ratio']:.3f}")
+    print(f"Sharpe Ratio:                       {((pf.returns().mean() * ann_factor)/(pf.returns().std() * (ann_factor ** .5))):.3f}")
+    print(f"Max Drawdown [%]:                   {full_stats['Max Drawdown [%]']:.3f}%")
+
+    pf.value().plot()
+    plt.show()
+
+    print('Values', pf.value())
+    print('Returns', pf.returns())
+
+    print("\nPortfolio Plot:")
+    fig = pf.plot()
+    fig.show()
+
+    print("\nVectorBT backtest completed.")
+
 def main():
     """
     Main function to run the LSTM model training and evaluation.
@@ -150,9 +219,28 @@ def main():
         
     print(f"Using device: {device_name}")  
  
-    csv_path = "data/2025-08-06-AKBNK-10.csv"
-
-    df = pd.read_csv(csv_path, sep=';', parse_dates=['DateTime'])
+    # Read all CSV files from data directory in alphabetical order
+    data_dir = "data"
+    csv_files = sorted([f for f in os.listdir(data_dir) if f.endswith('.csv')])
+    
+    print(f"Found {len(csv_files)} CSV files:")
+    for file in csv_files:
+        print(f"  - {file}")
+    
+    # Read and combine all CSV files
+    dfs = []
+    for csv_file in csv_files:
+        csv_path = os.path.join(data_dir, csv_file)
+        print(f"Reading {csv_file}...")
+        temp_df = pd.read_csv(csv_path, sep=';', parse_dates=['DateTime'])
+        dfs.append(temp_df)
+        print(f"  - Shape: {temp_df.shape}")
+    
+    df = pd.concat(dfs, ignore_index=True)
+    print(f"\nCombined DataFrame shape: {df.shape}")
+    
+    df = df.sort_values('DateTime').reset_index(drop=True)
+    print(f"DataFrame sorted by DateTime, final shape: {df.shape}")
 
     df['midPrice'] = (df['Level 1 Bid Price'] + df['Level 1 Ask Price']) / 2
     
@@ -317,9 +405,11 @@ def main():
     y_test_last = y_test_inverse[:, last_col_idx]
     y_hat_last = y_hat_inverse[:, last_col_idx]
 
+    strategy_type = 'mean_reversion'
+    
     decisions = create_trading_decisions(
         df, 
-        'momentum', 
+        strategy_type, 
         y_hat_last, 
         start_index=SEQ_LEN + int(0.9 * (len(df) - SEQ_LEN))
     )
@@ -327,58 +417,8 @@ def main():
     print("--------------------------------- \n ")
     print(decisions.tail(10))"""
     print("\n VectorBT backtest ...")
-    backtest_price = df['midPrice']
-    decisions_df = pd.DataFrame(decisions)
-    weights = decisions_df.div(decisions_df.abs().sum(axis=1), axis=0).fillna(0)
 
-    pf = vbt.Portfolio.from_orders(
-        close = backtest_price,
-        size=weights,
-        size_type='amount',
-        freq='1T',
-        init_cash=100,
-        cash_sharing=True,
-        call_seq='auto',
-        fees=0.001,
-        slippage=0.0005
-    )
-    """
-            close=price_data,
-            size=weights,
-            size_type=size_type,
-            init_cash=init_cash,
-            freq="1T",
-            cash_sharing=True,
-            call_seq='auto',
-            fees=0.001,  # %0.1 transaction cost
-            slippage=0.0005  # %0.05 slippage
-    """
-    orders = pf.orders
-    print("\nbuy count: ", orders.buy.count())
-    print("\nsell count: ", orders.sell.count())
-
-    full_stats = pf.stats()
-    ann_factor = pf.returns().vbt.returns().ann_factor
-    print(f"Ann Factor:                         {ann_factor}")
-    print("\nBacktest Stats:")
-    print(f"Ann Factor:                         {ann_factor}")
-    print(f"Total Return [%]:                   {full_stats['Total Return [%]']:.3f}%")
-    print(f"Annualized Expected Return [%]:     {(pf.returns().mean() * ann_factor):.3f}%")
-    print(f"Annualized Expected Volatility [%]: {pf.returns().std() * (ann_factor ** .5):.3f}%")
-    print(f"Sharpe Ratio:                       {full_stats['Sharpe Ratio']:.3f}")
-    print(f"Sharpe Ratio:                       {((pf.returns().mean() * ann_factor)/(pf.returns().std() * (ann_factor ** .5))):.3f}")
-    print(f"Max Drawdown [%]:                   {full_stats['Max Drawdown [%]']:.3f}%")
-
-    pf.value().plot()
-    plt.show()
-
-    print('Values', pf.value())
-    print('Returns', pf.returns())
-
-    print("\nPortfolio Plot:")
-    fig = pf.plot()
-    fig.show()
-    #run_backtest(df, y_hat_last, y_test_last, SEQ_LEN)
+    run_backtest(df, decisions)
 
 if __name__ == "__main__":
     main()
