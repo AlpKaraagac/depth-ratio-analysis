@@ -603,8 +603,9 @@ def main():
     print(f"Predicted prices length: {len(y_hat_last)}")
     print(f"Sequence length: {SEQ_LEN}")
     
-    start_index = SEQ_LEN + int(0.8 * (len(df) - SEQ_LEN))
-    print(f"Start index for test period: {start_index}")
+    start_index = SEQ_LEN + int(0.5 * (len(df) - SEQ_LEN))
+    print(f"Start index for validation+test period: {start_index}")
+    print(f"Split: 50% training, 50% validation+testing")
     
     strategies = ['momentum', 'mean_reversion', 'volatility_breakout']
     all_results = {}

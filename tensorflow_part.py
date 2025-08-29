@@ -35,31 +35,36 @@ def to_sequences(data, seq_len):
         d.append(data[index: index + seq_len])
     return np.array(d)
 
-def preprocess(data_raw, seq_len, train_split):
+def preprocess(data_raw, seq_len, train_split, val_split):
     """
     Preprocesses the raw data into sequences and splits it into
-    training and testing sets.
+    training, validation, and testing sets.
     
     Args:
         data_raw (np.array): The raw input data.
         seq_len (int): The length of each sequence.
         train_split (float): The proportion of data to use for training.
+        val_split (float): The proportion of data to use for validation.
         
     Returns:
-        tuple: X_train, y_train, X_test, y_test
+        tuple: X_train, y_train, X_val, y_val, X_test, y_test
     """
     data = to_sequences(data_raw, seq_len)
     num_train = int(train_split * data.shape[0])
+    num_val = int(val_split * data.shape[0])
 
     # X will be sequences of length (SEQ_LEN - 10)
     # y will be the 10th step after the X sequence ends
     X_train = data[:num_train, :-10, :]
     y_train = data[:num_train, -10, :]
 
-    X_test = data[num_train:, :-10, :]
-    y_test = data[num_train:, -10, :]
+    X_val = data[num_train:num_train + num_val, :-10, :]
+    y_val = data[num_train:num_train + num_val, -10, :]
 
-    return X_train, y_train, X_test, y_test
+    X_test = data[num_train + num_val:, :-10, :]
+    y_test = data[num_train + num_val:, :-10, :]
+
+    return X_train, y_train, X_val, y_val, X_test, y_test
 
 def numpy_mape(y_true, y_pred):
     y_true, y_pred = np.array(y_true), np.array(y_pred)
@@ -174,7 +179,7 @@ def main():
     scaled_features = scaler.fit_transform(feature_data)
     
     SEQ_LEN = 300
-    X_train, y_train, X_test, y_test = preprocess(scaled_features, SEQ_LEN, train_split = 0.9)
+    X_train, y_train, X_val, y_val, X_test, y_test = preprocess(scaled_features, SEQ_LEN, train_split = 0.5, val_split = 0.1)
     
     DROPOUT = 0.2
     WINDOW_SIZE = SEQ_LEN - 10
@@ -220,7 +225,7 @@ def main():
             epochs=350,
             batch_size=BATCH_SIZE,
             shuffle=False, 
-            validation_split=0.2,
+            validation_data=(X_val, y_val),
             callbacks=[lr_scheduler, model_checkpoint_callback]
         )
         print("Model training finished.")
@@ -303,6 +308,16 @@ def main():
     print(f"\nFeature columns used for training: {feature_columns}")
     print(f"Number of features: {N_FEATURES}")
 
+    # Calculate start index for trading decisions
+    # With new split: train 50%, validation 10%, test 40%
+    # start_index = SEQ_LEN + train_size + val_size
+    train_size = int(0.5 * (len(df) - SEQ_LEN))
+    val_size = int(0.1 * (len(df) - SEQ_LEN))
+    start_index = SEQ_LEN + train_size + val_size
+    
+    print(f"Data split - Train: 50%, Validation: 10%, Test: 40%")
+    print(f"Start index for trading decisions: {start_index}")
+
     # Save results for the next step
     results = {
         'df': df,
@@ -311,6 +326,7 @@ def main():
         'SEQ_LEN': SEQ_LEN,
         'feature_columns': feature_columns,
         'scaler': scaler,
+        'start_index': start_index,
         'metrics': {
             'mse': mse,
             'mae': mae,

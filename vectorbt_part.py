@@ -4,9 +4,128 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pickle
 import os
+from typing import Dict
 
 vbt.settings.returns['year_freq'] = '252 days'
 vbt.settings.array_wrapper['freq'] = '1min'
+
+def print_performance_report(stats: Dict, decisions: pd.DataFrame):
+        portfolio = stats['portfolio']
+        print("\n" + "="*60)
+        print("📊 PORTFÖY PERFORMANS RAPORU (VectorBT)")
+        print("="*60)
+        
+        print(f"💰 Toplam Getiri:           {stats['total_return']/100:.2%}")
+        print(f"📈 Yıllık Getiri:           {stats['annualized_return']/100:.2%}")
+        print(f"📊 Yıllık Volatilite:       {stats['annualized_volatility']/100:.2%}")
+        print(f"⚖️  Sharpe Oranı:            {stats['sharpe_ratio']:.3f}")
+        print(f"📉 Maksimum Drawdown:        {stats['max_drawdown']/100:.2%}")
+        
+        # Trading decisions istatistikleri ekle
+        if decisions is not None:
+            try:
+                decisions_values = decisions.iloc[:, 0].values  # İlk kolonu al
+                buy_signals = np.sum(decisions_values == 1)
+                sell_signals = np.sum(decisions_values == -1)
+                hold_signals = np.sum(decisions_values == 0)
+                
+                print(f"\n📊 TRADING SİNYALLERİ:")
+                print(f"   🟢 Buy Sinyalleri:          {buy_signals}")
+                print(f"   🔴 Sell Sinyalleri:         {sell_signals}")
+                print(f"   ⚪ Hold Sinyalleri:         {hold_signals}")
+                print(f"   📈 Buy/Sell Oranı:          {buy_signals/max(sell_signals,1):.2f}")
+                
+            except Exception as e:
+                print(f"   ⚠️ Trading signals not available: {e}")
+        
+        if portfolio.trades is not None:
+            try:
+                trades = portfolio.trades.records
+                
+                if len(trades) > 0:
+                    print(f"\n📈 VECTORBT TRADING SUMMARY:")
+                    print(f"   Toplam Trade Sayısı:    {len(trades)}")
+                    
+                    # Hit Ratio Metrikleri
+                    if 'pnl' in trades.columns:
+                        winning_trades = (trades['pnl'] > 0).sum()
+                        losing_trades = (trades['pnl'] <= 0).sum()
+                        total_trades = len(trades)
+                        
+                        # Basic Hit Ratio
+                        hit_ratio = (winning_trades / total_trades * 100) if total_trades > 0 else 0
+                        print(f"   🎯 Hit Ratio (Trades-based):    {hit_ratio:.2f}%")
+                        
+                        # Directional Hit Ratio (Trend Accuracy)
+                        if 'direction' in trades.columns:
+                            buy_trades = (trades['direction'] == 0).sum()  # 0 = Buy in VectorBT
+                            sell_trades = (trades['direction'] == 1).sum()  # 1 = Sell in VectorBT
+                            
+                            if buy_trades > 0:
+                                buy_wins = trades[(trades['direction'] == 0) & (trades['pnl'] > 0)].shape[0]
+                                buy_hit_ratio = (buy_wins / buy_trades * 100) if buy_trades > 0 else 0
+                                print(f"   🟢 Buy Hit Ratio:           {buy_hit_ratio:.2f}% ({buy_wins}/{buy_trades})")
+                            
+                            if sell_trades > 0:
+                                sell_wins = trades[(trades['direction'] == 1) & (trades['pnl'] > 0)].shape[0]
+                                sell_hit_ratio = (sell_wins / sell_trades * 100) if sell_trades > 0 else 0
+                                print(f"   🔴 Sell Hit Ratio:          {sell_hit_ratio:.2f}% ({sell_wins}/{sell_trades})")
+                        
+                        # Risk-Adjusted Hit Ratio
+                        if winning_trades > 0 and losing_trades > 0:
+                            avg_win = trades[trades['pnl'] > 0]['pnl'].mean()
+                            avg_loss = abs(trades[trades['pnl'] <= 0]['pnl'].mean())
+                            risk_ratio = avg_win / avg_loss if avg_loss > 0 else 0
+                            print(f"   ⚖️  Risk-Reward Ratio:        {risk_ratio:.2f}")
+                        
+                        # Hit Ratio Quality Score
+                        quality_score = (hit_ratio * 0.4) + (min(risk_ratio, 3) * 20) if 'risk_ratio' in locals() else hit_ratio
+                        print(f"   🏆 Hit Ratio Quality Score: {quality_score:.1f}/100")
+                    
+                    # Count buy/sell trades
+                    if 'direction' in trades.columns:
+                        buy_trades = (trades['direction'] == 0).sum()  # 0 = Buy in VectorBT
+                        sell_trades = (trades['direction'] == 1).sum()  # 1 = Sell in VectorBT
+                        print(f"   🟢 Buy Trades:              {buy_trades}")
+                        print(f"   🔴 Sell Trades:             {sell_trades}")
+                        
+                        # Trade balance
+                        if buy_trades > 0 and sell_trades > 0:
+                            print(f"   ⚖️  Trade Dengesi:           {buy_trades/sell_trades:.2f}")
+                    
+                    # Winning vs Losing trades
+                    if 'pnl' in trades.columns:
+                        winning_trades = (trades['pnl'] > 0).sum()
+                        losing_trades = (trades['pnl'] <= 0).sum()
+                        print(f"   ✅ Kazanan Trade'ler:       {winning_trades}")
+                        print(f"   ❌ Kaybeden Trade'ler:      {losing_trades}")
+                    
+                    # Show fees if available
+                    if 'entry_fees' in trades.columns and 'exit_fees' in trades.columns:
+                        entry_fees = trades['entry_fees'].sum()
+                        exit_fees = trades['exit_fees'].sum()
+                        total_fees = entry_fees + exit_fees
+                        print(f"   📊 Entry Fees:            {entry_fees:.2f}")
+                        print(f"   📊 Exit Fees:             {exit_fees:.2f}")
+                        print(f"   💰 Toplam Fees:           {total_fees:.2f}")
+                        
+                        # Fee breakdown per trade
+                        avg_entry_fee = entry_fees / len(trades) if len(trades) > 0 else 0
+                        avg_exit_fee = exit_fees / len(trades) if len(trades) > 0 else 0
+                        print(f"   📈 Ortalama Entry Fee:    {avg_entry_fee:.2f}")
+                        print(f"   📈 Ortalama Exit Fee:     {avg_exit_fee:.2f}")
+                    
+                    # Show PnL if available
+                    if 'pnl' in trades.columns:
+                        winning_trades = trades[trades['pnl'] > 0]
+                        print(f"   Winning Trades:          {len(winning_trades)}")
+                        print(f"   Losing Trades:           {len(trades) - len(winning_trades)}")
+                        
+            except Exception as e:
+                print(f"   ⚠️ Trading info not available: {e}")
+        
+        print("="*60)
+
 
 def run_backtest(df, decisions, strategy_name):
     print(f"\n=== VectorBT Backtest for {strategy_name.upper()} Strategy ===")
@@ -31,13 +150,30 @@ def run_backtest(df, decisions, strategy_name):
         full_stats = pf.stats()
         ann_factor = pf.returns().vbt.returns().ann_factor
         
-        print(f"Ann Factor:                         {ann_factor}")
+        total_return = full_stats['Total Return [%]']
+        annualized_return = (pf.returns().mean() * ann_factor) * 100
+        annualized_volatility = pf.returns().std() * (ann_factor ** 0.5) * 100
+        sharpe_ratio = full_stats['Sharpe Ratio']
+        max_drawdown = full_stats['Max Drawdown [%]']
+        
+        stats_dict = {
+            'portfolio': pf,
+            'total_return': total_return,
+            'annualized_return': annualized_return,
+            'annualized_volatility': annualized_volatility,
+            'sharpe_ratio': sharpe_ratio,
+            'max_drawdown': max_drawdown
+        }
+        
+        print_performance_report(stats_dict, decisions_df)
+        
+        print(f"\nAnn Factor:                         {ann_factor}")
         print("\nBacktest Stats:")
-        print(f"Total Return [%]:                   {full_stats['Total Return [%]']:.3f}%")
-        print(f"Annualized Expected Return [%]:     {(pf.returns().mean() * ann_factor):.3f}%")
-        print(f"Annualized Expected Volatility [%]: {pf.returns().std() * (ann_factor ** .5):.3f}%")
-        print(f"Sharpe Ratio:                       {full_stats['Sharpe Ratio']:.3f}")
-        print(f"Max Drawdown [%]:                   {full_stats['Max Drawdown [%]']:.3f}%")
+        print(f"Total Return [%]:                   {total_return:.3f}%")
+        print(f"Annualized Expected Return [%]:     {annualized_return:.3f}%")
+        print(f"Annualized Expected Volatility [%]: {annualized_volatility:.3f}%")
+        print(f"Sharpe Ratio:                       {sharpe_ratio:.3f}")
+        print(f"Max Drawdown [%]:                   {max_drawdown:.3f}%")
         print(f"Win Rate:                           {full_stats['Win Rate [%]']:.3f}%")
         print(f"Profit Factor:                      {full_stats['Profit Factor']:.3f}")
         print(f"Calmar Ratio:                       {full_stats['Calmar Ratio']:.3f}")
@@ -289,6 +425,27 @@ def main():
     print(f"Total Return: {best_strategy['Total Return [%]']:.3f}%")
     print(f"Sharpe Ratio: {best_strategy['Sharpe Ratio']:.3f}")
     print(f"Max Drawdown: {best_strategy['Max Drawdown [%]']:.3f}%")
+    
+    print(f"\n{'='*60}")
+    print(f"📊 COMPREHENSIVE PERFORMANCE REPORT FOR BEST STRATEGY: {best_strategy['Strategy']}")
+    print(f"{'='*60}")
+    
+    best_strategy_name = best_strategy['Strategy'].lower()
+    if best_strategy_name in backtest_results:
+        best_results = backtest_results[best_strategy_name]
+        best_portfolio = best_results['portfolio']
+        best_decisions = strategies[best_strategy_name]['decisions']
+        
+        best_stats = {
+            'portfolio': best_portfolio,
+            'total_return': best_strategy['Total Return [%]'],
+            'annualized_return': best_strategy['Total Return [%]'] * (252 / len(df)),
+            'annualized_volatility': best_portfolio.returns().std() * (252 ** 0.5) * 100,
+            'sharpe_ratio': best_strategy['Sharpe Ratio'],
+            'max_drawdown': best_strategy['Max Drawdown [%]']
+        }
+        
+        print_performance_report(best_stats, pd.DataFrame(best_decisions))
 
 if __name__ == "__main__":
     main()
